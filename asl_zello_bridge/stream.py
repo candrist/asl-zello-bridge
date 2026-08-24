@@ -30,3 +30,8 @@ class AsyncByteStream:
                     return data
 
             await self._data_available.wait()
+
+    async def clear(self):
+        async with self._lock:
+            self._buffer = io.BytesIO()
+            self._data_available.clear()
