@@ -29,6 +29,9 @@ The bridge does not require significant resources. The FreeSTAR bridge runs on a
   - [Install with pip + venv](#install-with-pip--venv)
   - [Install with setup.py (deprecated)](#deprecated-install-with-setuppy)
   - [Docker](#docker)
+    - [Build](#build)
+    - [Run with Compose](#run-with-compose)
+    - [Multiple instances (one per channel)](#multiple-instances-one-per-channel)
 - [Setup Service](#setup-service)
   - [Common Parameters](#common-parameters-used-in-both-free-and-work)
   - [Zello Free Example](#zello-free-example)
@@ -321,31 +324,109 @@ Resulting section:
 
 ## Docker
 
-A `Dockerfile` is included:
+### Build
 
 ```bash
 docker build -t asl-zello-bridge .
 ```
 
-Run with required environment variables (Zello Free example):
+The image is multi-stage: PyOgg is installed from a pinned commit of the upstream repository (override with `--build-arg PYOGG_REF=<ref>`), and the final image runs as a non-root user with only the runtime Opus/Ogg libraries.
+
+### Run with Compose
+
+```bash
+cp bridge.env.example bridge.env   # then edit bridge.env
+mkdir -p keys                      # place zello.key here (Zello Free)
+docker compose up -d --build
+docker compose logs -f
+```
+
+The compose file:
+
+* reads container configuration from `bridge.env` (override the path with `BRIDGE_ENV_FILE=/path/to/file`),
+* publishes UDP `34001` on the host (override with `USRP_PUBLISH_PORT=`),
+* mounts `./keys` into the container at `/keys` read-only (override with `KEYS_DIR=`).
+
+Point your AllStarLink node at the published port:
+
+```ini
+rxchannel = USRP/127.0.0.1:34001:32001
+```
+
+When Asterisk/AllStarLink runs on the Docker host, keep `USRP_HOST=host.docker.internal` in `bridge.env` (the compose file maps it to the host gateway). If Asterisk runs on another machine, set `USRP_HOST` to that address instead.
+
+Plain `docker run` equivalent (Zello Free example):
 
 ```bash
 docker run --rm -it \
+  --add-host host.docker.internal:host-gateway \
   -e USRP_BIND=0.0.0.0 \
-  -e USRP_HOST=allstar.node \
+  -e USRP_HOST=host.docker.internal \
   -e USRP_RXPORT=34001 \
   -e USRP_TXPORT=32001 \
   -e ZELLO_WS_ENDPOINT=wss://zello.io/ws \
   -e ZELLO_CHANNEL="My Test Channel" \
-  -e ZELLO_PRIVATE_KEY=/test.key \
+  -e ZELLO_PRIVATE_KEY=/keys/zello.key \
   -e ZELLO_USERNAME=myuser \
   -e ZELLO_PASSWORD=mypass \
   -e ZELLO_ISSUER=my-issuer-id \
-  -v /src/asl-zello-bridge/test.key:/test.key \
+  -v "$PWD/zello.key:/keys/zello.key:ro" \
+  -p 34001:34001/udp \
   asl-zello-bridge
 ```
 
-This also works with `docker-compose`, Kubernetes, or any container runtime.
+### Multiple instances (one per channel)
+
+Run one isolated Compose project per Zello channel. Each instance needs its own env file, a unique published UDP host port, and its own `-p` project name:
+
+```bash
+mkdir -p instances keys
+
+cp bridge.env.example instances/node1000.env   # edit values
+
+BRIDGE_ENV_FILE=instances/node1000.env USRP_PUBLISH_PORT=34001 \
+  docker compose -p zello-node1000 up -d --build
+
+cp bridge.env.example instances/node1001.env   # edit values
+
+BRIDGE_ENV_FILE=instances/node1001.env USRP_PUBLISH_PORT=34002 \
+  docker compose -p zello-node1001 up -d --build
+```
+
+Inside each env file `USRP_RXPORT` can stay `34001` because containers are network-isolated from each other; only the published port differs. Point node `1001` at `127.0.0.1:34001:32001` and node `1002` at `127.0.0.1:34002:32001`.
+
+Each instance is managed independently:
+
+```bash
+BRIDGE_ENV_FILE=instances/node1000.env docker compose -p zello-node1000 logs -f
+BRIDGE_ENV_FILE=instances/node1001.env docker compose -p zello-node1001 restart
+```
+
+#### Host networking variant
+
+If you prefer no address translation (for example, Asterisk requires `127.0.0.1`), use `network_mode: host` via an override file such as `docker-compose.host.yml`:
+
+```yaml
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    env_file:
+      - ${BRIDGE_ENV_FILE:-bridge.env}
+    volumes:
+      - ${KEYS_DIR:-./keys}:/keys:ro
+```
+
+```bash
+BRIDGE_ENV_FILE=instances/node1000.env \
+  docker compose -f docker-compose.host.yml -p zello-node1000 up -d --build
+```
+
+With host networking every instance shares the host network stack, so `USRP_RXPORT` and `USRP_TXPORT` must be **unique per instance** (and match that node's `rxchannel`), while `USRP_BIND=127.0.0.1` and `USRP_HOST=127.0.0.1` become valid again.
+
+This also works with Kubernetes or any container runtime.
 
 ---
 

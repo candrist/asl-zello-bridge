@@ -1,0 +1,14 @@
+services:
+  bridge:
+    build: .
+    image: ${BRIDGE_IMAGE:-asl-zello-bridge:local}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${BRIDGE_ENV_FILE:-bridge.env}
+    ports:
+      - "${USRP_PUBLISH_PORT:-34001}:${USRP_RXPORT:-34001}/udp"
+    volumes:
+      - ${KEYS_DIR:-./keys}:/keys:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

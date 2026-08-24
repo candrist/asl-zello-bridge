@@ -1,2 +1,5 @@
 /asl_zello_bridge/__pycache__/
 /.direnv/
+*.env
+/keys/
+/instances/

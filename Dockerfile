@@ -1,28 +1,45 @@
-FROM python:3.12.8-slim-bookworm
+# syntax=docker/dockerfile:1
 
-# Install dependencies
+ARG PYOGG_REF=4118fc40067eb475468726c6bccf1242abfc24fc
+
+FROM python:3.12-slim-bookworm AS builder
+
+ARG PYOGG_REF
+
 RUN apt-get update \
-    && apt-get install -y python3-setuptools python3-venv python3-pip git libogg-dev libopusenc-dev libflac-dev libopusfile-dev libopus-dev libvorbis-dev libopus0
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create virtual environment for bridge
-RUN mkdir -p /opt/asl-zello-bridge/venv \
-    && python3 -m venv /opt/asl-zello-bridge/venv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
 
-# Ensure setuptools installed
-RUN /opt/asl-zello-bridge/venv/bin/pip install setuptools
+COPY . /src
 
-# Install PyOgg to venv
-RUN cd /opt \
-    && git clone https://github.com/TeamPyOgg/PyOgg.git \
-    && cd PyOgg \
-    && /opt/asl-zello-bridge/venv/bin/python setup.py install
+# Resolve PyOgg from the pinned commit together with the bridge package in a
+# single resolver run so both come from one consistent dependency set.
+RUN pip install --no-cache-dir \
+    "/src" \
+    "pyogg @ git+https://github.com/TeamPyOgg/PyOgg.git@${PYOGG_REF}"
 
-# Install bridge
-ADD . /opt/asl-zello-bridge
-RUN cd /opt/asl-zello-bridge \
-    && /opt/asl-zello-bridge/venv/bin/pip3 install .
+FROM python:3.12-slim-bookworm
 
-# Cleanup
-RUN apt-get clean
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libogg0 \
+        libopus0 \
+        libopusenc0 \
+        libopusfile0 \
+        libflac12 \
+        libvorbis0a \
+        libvorbisenc2 \
+        libvorbisfile3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --no-create-home --uid 999 bridge
 
-CMD ["/opt/asl-zello-bridge/venv/bin/asl-zello-bridge"]
+COPY --from=builder /opt/venv /opt/venv
+
+ENV PATH="/opt/venv/bin:${PATH}"
+
+USER bridge
+
+CMD ["asl-zello-bridge"]

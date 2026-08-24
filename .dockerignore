@@ -1,0 +1,16 @@
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose*.yml
+*.service
+__pycache__/
+*.pyc
+.direnv/
+.env*
+*.env
+keys/
+instances/
+flake.nix
+flake.lock
+pyogg-paths.patch
