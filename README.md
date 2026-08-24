@@ -341,27 +341,26 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The compose file:
+The compose file runs the container with **host networking**, so `USRP_RXPORT` and `USRP_TXPORT` from `bridge.env` are used directly on the Docker host's network stack — no port translation, and `127.0.0.1` reaches Asterisk as usual. It:
 
 * reads container configuration from `bridge.env` (override the path with `BRIDGE_ENV_FILE=/path/to/file`),
-* publishes UDP `34001` on the host (override with `USRP_PUBLISH_PORT=`),
 * mounts `./keys` into the container at `/keys` read-only (override with `KEYS_DIR=`).
 
-Point your AllStarLink node at the published port:
+Point your AllStarLink node at the bridge using the ports from your env file:
 
 ```ini
 rxchannel = USRP/127.0.0.1:34001:32001
 ```
 
-When Asterisk/AllStarLink runs on the Docker host, keep `USRP_HOST=host.docker.internal` in `bridge.env` (the compose file maps it to the host gateway). If Asterisk runs on another machine, set `USRP_HOST` to that address instead.
+When Asterisk/AllStarLink runs on another machine, set `USRP_HOST` to that address and `USRP_BIND=0.0.0.0`.
 
 Plain `docker run` equivalent (Zello Free example):
 
 ```bash
 docker run --rm -it \
-  --add-host host.docker.internal:host-gateway \
-  -e USRP_BIND=0.0.0.0 \
-  -e USRP_HOST=host.docker.internal \
+  --network host \
+  -e USRP_BIND=127.0.0.1 \
+  -e USRP_HOST=127.0.0.1 \
   -e USRP_RXPORT=34001 \
   -e USRP_TXPORT=32001 \
   -e ZELLO_WS_ENDPOINT=wss://zello.io/ws \
@@ -371,29 +370,36 @@ docker run --rm -it \
   -e ZELLO_PASSWORD=mypass \
   -e ZELLO_ISSUER=my-issuer-id \
   -v "$PWD/zello.key:/keys/zello.key:ro" \
-  -p 34001:34001/udp \
   asl-zello-bridge
 ```
 
 ### Multiple instances (one per channel)
 
-Run one isolated Compose project per Zello channel. Each instance needs its own env file, a unique published UDP host port, and its own `-p` project name:
+Run one isolated Compose project per Zello channel. Because the containers share the host network stack, each instance needs its own env file with a **unique `USRP_RXPORT`** (and that node's `USRP_TXPORT`), plus its own `-p` project name:
 
 ```bash
 mkdir -p instances keys
 
-cp bridge.env.example instances/node1000.env   # edit values
+cp bridge.env.example instances/node1000.env   # set USRP_RXPORT=34001, USRP_TXPORT=32001 + credentials
 
-BRIDGE_ENV_FILE=instances/node1000.env USRP_PUBLISH_PORT=34001 \
+BRIDGE_ENV_FILE=instances/node1000.env \
   docker compose -p zello-node1000 up -d --build
 
-cp bridge.env.example instances/node1001.env   # edit values
+cp bridge.env.example instances/node1001.env   # set USRP_RXPORT=34002, USRP_TXPORT=33001 + credentials
 
-BRIDGE_ENV_FILE=instances/node1001.env USRP_PUBLISH_PORT=34002 \
+BRIDGE_ENV_FILE=instances/node1001.env \
   docker compose -p zello-node1001 up -d --build
 ```
 
-Inside each env file `USRP_RXPORT` can stay `34001` because containers are network-isolated from each other; only the published port differs. Point node `1001` at `127.0.0.1:34001:32001` and node `1002` at `127.0.0.1:34002:32001`.
+Matching `rpt.conf` entries:
+
+```ini
+[1001]
+rxchannel = USRP/127.0.0.1:34001:32001
+
+[1002]
+rxchannel = USRP/127.0.0.1:34002:33001
+```
 
 Each instance is managed independently:
 
@@ -402,29 +408,26 @@ BRIDGE_ENV_FILE=instances/node1000.env docker compose -p zello-node1000 logs -f
 BRIDGE_ENV_FILE=instances/node1001.env docker compose -p zello-node1001 restart
 ```
 
-#### Host networking variant
+#### Bridge networking variant (optional)
 
-If you prefer no address translation (for example, Asterisk requires `127.0.0.1`), use `network_mode: host` via an override file such as `docker-compose.host.yml`:
+If you prefer container isolation with published ports over host networking, use a compose override such as `docker-compose.bridge.yml`:
 
 ```yaml
 services:
   bridge:
-    build: .
-    restart: unless-stopped
-    init: true
-    network_mode: host
-    env_file:
-      - ${BRIDGE_ENV_FILE:-bridge.env}
-    volumes:
-      - ${KEYS_DIR:-./keys}:/keys:ro
+    network_mode: bridge   # cancels host networking from docker-compose.yml
+    ports:
+      - "${USRP_PUBLISH_PORT:-34001}:${USRP_RXPORT:-34001}/udp"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 ```
 
 ```bash
 BRIDGE_ENV_FILE=instances/node1000.env \
-  docker compose -f docker-compose.host.yml -p zello-node1000 up -d --build
+  docker compose -f docker-compose.yml -f docker-compose.bridge.yml -p zello-node1000 up -d --build
 ```
 
-With host networking every instance shares the host network stack, so `USRP_RXPORT` and `USRP_TXPORT` must be **unique per instance** (and match that node's `rxchannel`), while `USRP_BIND=127.0.0.1` and `USRP_HOST=127.0.0.1` become valid again.
+In this mode set `USRP_BIND=0.0.0.0` and `USRP_HOST=host.docker.internal`, and add `extra_hosts: ["host.docker.internal:host-gateway"]`. Note that return audio arrives at Asterisk from the Docker gateway IP rather than `127.0.0.1`; if Asterisk binds its USRP channel to loopback only, prefer the default host networking. In this variant `USRP_RXPORT` can stay `34001` in every env file — only the published port differs.
 
 This also works with Kubernetes or any container runtime.
 
