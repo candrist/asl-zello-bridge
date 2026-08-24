@@ -469,6 +469,7 @@ class ZelloController:
                                 self._logger.debug(
                                     f"USRP PTT released at {now}")
                             self._ptt_down_at = None
+                            await self._stream_in.clear()
                         if sending:
                             sending = False
                             first_pcm_logged = False
@@ -482,6 +483,7 @@ class ZelloController:
                             if self._logger.isEnabledFor(logging.DEBUG):
                                 self._logger.debug(
                                     f"USRP PTT down at {self._ptt_down_at}")
+                            await self._stream_in.clear()
                         if (datetime.now(timezone.utc) - self._ptt_down_at).total_seconds() < 0.15:
                             await asyncio.sleep(0.01)
                             continue
@@ -596,10 +598,7 @@ class ZelloController:
             self._logger.debug('run_rx starting')
         while not self._shutdown:
             try:
-                conn = aiohttp.TCPConnector(family=socket.AF_INET, ssl=False)
-                decoder = None
-                is_channel_available = False
-                is_authorized = False
+                conn = aiohttp.TCPConnector(family=socket.AF_INET)
                 decoder = OpusDecoder()
                 decoder.set_channels(1)
                 decoder.set_sampling_frequency(8000)
@@ -710,8 +709,12 @@ class ZelloController:
                                                     f"Channel backoff until {self._channel_backoff_until}")
                                             continue
                                         else:
-                                            self._logger.error(
-                                                f'Server error: {self._redact(data)}')
+                                            if self._auth_in_progress:
+                                                self._logger.error(
+                                                    f'Authentication failed: {self._redact(data)}')
+                                            else:
+                                                self._logger.error(
+                                                    f'Server error: {self._redact(data)}')
                                             break
 
                                     if 'command' in data:
@@ -763,7 +766,6 @@ class ZelloController:
                                                     "Channel is ready")
 
                                     if 'success' in data:
-                                        is_authorized = True
                                         # Any success matching the auth seq clears auth_in_progress
                                         if self._auth_seq is not None and data.get('seq') == self._auth_seq:
                                             self._auth_in_progress = False
@@ -810,11 +812,6 @@ class ZelloController:
                                                     self._logger.debug(
                                                         f'Failed to decode refresh token expiry: {e}')
 
-                                    if (not is_authorized) and (not is_channel_available):
-                                        self._logger.error(
-                                            'Authentication failed')
-                                        break
-                                    else:
                                         if not self._logged_in:
                                             self._logger.info('Logged in!')
                                         self._logged_in = True

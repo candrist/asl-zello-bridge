@@ -62,6 +62,10 @@ class USRPController(asyncio.DatagramProtocol):
         self._transport = transport
 
     def datagram_received(self, data, addr):
+        if len(data) < USRP_HEADER_SIZE:
+            self._logger.debug(
+                f'Ignoring short packet ({len(data)} bytes) from {addr}')
+            return
         ptt = self._frame_ptt_state(data)
         if not ptt:
             self._usrp_ptt.clear()
@@ -126,9 +130,11 @@ class USRPController(asyncio.DatagramProtocol):
             # Send PTT off packet if Zello PTT is off
             if not self._zello_ptt.is_set():
                 await self._tx_off()
+                await self._stream_in.clear()
 
             # Wait for Zello PTT
             await self._zello_ptt.wait()
+            await self._stream_in.clear()
 
             try:
                 pcm = await asyncio.wait_for(self._stream_in.read(USRP_VOICE_SIZE), timeout=0.1)
