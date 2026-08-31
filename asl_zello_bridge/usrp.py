@@ -125,16 +125,20 @@ class USRPController(asyncio.DatagramProtocol):
             self._transport.sendto(frame, (self._tx_address, self._tx_port))
 
     async def run_tx(self):
+        ptt_active = False
         while True:
 
             # Send PTT off packet if Zello PTT is off
             if not self._zello_ptt.is_set():
-                await self._tx_off()
-                await self._stream_in.clear()
+                if ptt_active:
+                    await self._tx_off()
+                    await self._stream_in.clear()
+                    ptt_active = False
 
-            # Wait for Zello PTT
-            await self._zello_ptt.wait()
-            await self._stream_in.clear()
+                # Wait for Zello PTT
+                await self._zello_ptt.wait()
+                await self._stream_in.clear()
+                ptt_active = True
 
             try:
                 pcm = await asyncio.wait_for(self._stream_in.read(USRP_VOICE_SIZE), timeout=0.1)
